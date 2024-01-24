@@ -1,0 +1,52 @@
+### I use an inventory VAR called "site_abbrev" set to the site's "slug" that the switch belongs to (line 22).
+### This allows me to dynamically look up the site information that the VLAN belongs to at runtime to get its ID (same for its tenant ID).
+### I also use that abbreviation in the VLAN Name in NetBox (line 36).
+---
+- name: Bootstrap Netbox Vlans from a Cisco Switch
+  hosts: all
+  gather_facts: false
+  vars:
+    netbox_url: "http://netbox.local"
+    netbox_token: "thisIsMyToken"
+    netbox_sites: "{{ query('netbox.netbox.nb_lookup', 'sites', api_endpoint=netbox_url, token=netbox_token, validate_certs=false) }}"
+  ###############################################
+  tasks:
+    ###############################################
+    - name: Gather facts (ios)
+      cisco.ios.ios_facts:
+        gather_network_resources: 
+          - 'vlans'
+      timeout: 120
+    ###############################################
+    - name: Set initial facts
+      ansible.builtin.set_fact:
+        netbox_site: "{{ netbox_sites | json_query('[?value.slug == `' + site_abbrev + '`] | [0]') }}"
+        device_vlans: "{{ ansible_network_resources['vlans'] }}"
+    ###############################################
+    - name: Set more facts
+      ansible.builtin.set_fact:
+        netbox_site_id: "{{ netbox_site['value']['id'] }}"
+        netbox_tenant_id: "{{ netbox_site['value']['tenant']['id'] }}"
+    ###############################################
+    - name: Create vlans with most of the information
+      netbox.netbox.netbox_vlan:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_token }}"
+        data:
+          name: "{{ site_abbrev | upper }} - {{ item.name }}"
+          vid: "{{ item.vlan_id }}"
+          site: 
+            id: "{{ netbox_site_id }}"
+          tenant:
+            id: "{{ netbox_tenant_id }}"
+          #group: Test VLAN Group
+          status: Active
+          # vlan_role: Test VLAN Role
+          description: "{{ item.name }}"
+          #tags:
+          #  - Schnozzberry
+        state: present
+        validate_certs: no
+      delegate_to: localhost
+      with_items: "{{ device_vlans }}"
+      when: (item.state == 'active') and (item.shutdown == 'disabled')
